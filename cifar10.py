@@ -470,8 +470,8 @@ def inference_small_config(x, c, labels):
     with tf.variable_scope('fc'):
         x = fc(pooled_features, c)
 
-    context_pred = context(pooled_features, labels, c)
-    context_logits = context_infer(pooled_features, c)
+#    context_pred = context(pooled_features, labels, c)
+#    context_logits = context_infer(pooled_features, c)
 
     return x #, context_pred, context_logits
 

@@ -54,9 +54,9 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('train_dir', 'data/train',
                            """Directory where to write event logs """
                            """and checkpoint.""")
-tf.app.flags.DEFINE_integer('max_steps', 1000000,
+tf.app.flags.DEFINE_integer('max_steps', 64000,
                             """Number of batches to run.""")
-tf.app.flags.DEFINE_integer('num_gpus', 2,
+tf.app.flags.DEFINE_integer('num_gpus', 8,
                             """How many GPUs to use.""")
 tf.app.flags.DEFINE_boolean('log_device_placement', False,
                             """Whether to log device placement.""")
@@ -161,14 +161,15 @@ def train():
     decay_steps = int(num_batches_per_epoch * cifar10.NUM_EPOCHS_PER_DECAY)
 
     # Decay the learning rate exponentially based on the number of steps.
-    lr = tf.train.exponential_decay(cifar10.INITIAL_LEARNING_RATE,
-                                    global_step,
-                                    decay_steps,
-                                    cifar10.LEARNING_RATE_DECAY_FACTOR,
-                                    staircase=True)
+    # lr = tf.train.exponential_decay(cifar10.INITIAL_LEARNING_RATE,
+    #                                 global_step,
+    #                                 decay_steps,
+    #                                 cifar10.LEARNING_RATE_DECAY_FACTOR,
+    #                                 staircase=True)
+    lr = tf.placeholder(tf.float32, shape=[])
 
     # Create an optimizer that performs gradient descent.
-    opt = tf.train.GradientDescentOptimizer(lr)
+    opt = tf.train.GradientDescentOptimizer(learning_rate=lr)
 
     # Calculate the gradients for each model tower.
     tower_grads = []
@@ -244,13 +245,25 @@ def train():
     summary_writer = tf.train.SummaryWriter(FLAGS.train_dir, sess.graph)
 
     for step in xrange(FLAGS.max_steps):
+      if step == 0:
+        stairs=.1
+        print(step,stairs)
+      elif step == 32000-1:
+        stairs=.01
+        print(step,stairs)
+      elif step == 48000-1:
+        stairs=.001
+        print(step,stairs)
+      elif step == 64000-1:
+        print(step)
+
       start_time = time.time()
-      _, loss_value = sess.run([train_op, loss])
+      _, loss_value = sess.run([train_op, loss], feed_dict={lr: stairs})
       duration = time.time() - start_time
 
       assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
-      if step % 10 == 0:
+      if step % 1000 == 0:
         num_examples_per_step = FLAGS.batch_size * FLAGS.num_gpus
         examples_per_sec = num_examples_per_step / duration
         sec_per_batch = duration / FLAGS.num_gpus
