@@ -56,7 +56,7 @@ tf.app.flags.DEFINE_string('train_dir', 'data/train',
                            """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 1000000,
                             """Number of batches to run.""")
-tf.app.flags.DEFINE_integer('num_gpus', 8,
+tf.app.flags.DEFINE_integer('num_gpus', 2,
                             """How many GPUs to use.""")
 tf.app.flags.DEFINE_boolean('log_device_placement', False,
                             """Whether to log device placement.""")
@@ -94,6 +94,7 @@ def tower_loss(scope):
   # Attach a scalar summary to all individual losses and the total loss; do the
   # same for the averaged version of the losses.
   for l in losses + [total_loss]:
+    assert l is not None
     # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
     # session. This helps the clarity of presentation on tensorboard.
     loss_name = re.sub('%s_[0-9]*/' % cifar10.TOWER_NAME, '', l.op.name)
@@ -178,6 +179,7 @@ def train():
           # constructs the entire CIFAR model but shares the variables across
           # all towers.
           loss = tower_loss(scope)
+          assert loss is not None
 
           # Reuse variables for the next tower.
           tf.get_variable_scope().reuse_variables()
@@ -187,7 +189,7 @@ def train():
 
           # Calculate the gradients for the batch of data on this CIFAR tower.
           grads = opt.compute_gradients(loss)
-
+          assert grads is not None
           # Keep track of the gradients across all towers.
           tower_grads.append(grads)
 
