@@ -75,7 +75,7 @@ def tower_loss(scope):
   images, labels = cifar10.distorted_inputs()
 
   # Build inference Graph.
-  logits = cifar10.inference(images)
+  logits = cifar10.inference(images, labels=labels)
 
   # Build the portion of the Graph calculating the losses. Note that we will
   # assemble the total_loss using a custom function below.
@@ -155,12 +155,12 @@ def train():
         'global_step', [],
         initializer=tf.constant_initializer(0), trainable=False)
 
-    # Calculate the learning rate schedule.
-    num_batches_per_epoch = (cifar10.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN /
-                             FLAGS.batch_size)
-    decay_steps = int(num_batches_per_epoch * cifar10.NUM_EPOCHS_PER_DECAY)
+    # # Calculate the learning rate schedule.
+    # num_batches_per_epoch = (cifar10.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN /
+    #                          FLAGS.batch_size)
+    # decay_steps = int(num_batches_per_epoch * cifar10.NUM_EPOCHS_PER_DECAY)
 
-    # Decay the learning rate exponentially based on the number of steps.
+    # # Decay the learning rate exponentially based on the number of steps.
     # lr = tf.train.exponential_decay(cifar10.INITIAL_LEARNING_RATE,
     #                                 global_step,
     #                                 decay_steps,
@@ -247,15 +247,15 @@ def train():
     for step in xrange(FLAGS.max_steps):
       if step == 0:
         stairs=.1
-        print(step,stairs)
+        print("steps",step,"lr",stairs)
       elif step == 32000-1:
         stairs=.01
-        print(step,stairs)
+        print("steps",step,"lr",stairs)
       elif step == 48000-1:
         stairs=.001
-        print(step,stairs)
+        print("steps",step,"lr",stairs)
       elif step == 64000-1:
-        print(step)
+        print("steps",step)
 
       start_time = time.time()
       _, loss_value = sess.run([train_op, loss], feed_dict={lr: stairs})
@@ -274,7 +274,7 @@ def train():
                              examples_per_sec, sec_per_batch))
 
       if step % 100 == 0:
-        summary_str = sess.run(summary_op)
+        summary_str = sess.run(summary_op , feed_dict={lr: stairs})
         summary_writer.add_summary(summary_str, step)
 
       # Save the model checkpoint periodically.

@@ -54,13 +54,12 @@ from config import Config
 MOVING_AVERAGE_DECAY = 0.9997
 BN_DECAY = MOVING_AVERAGE_DECAY
 BN_EPSILON = 0.001
-CONV_WEIGHT_DECAY = 0.00004
+CONV_WEIGHT_DECAY = 0.0001
 CONV_WEIGHT_STDDEV = 0.1
-FC_WEIGHT_DECAY = 0.00004
+FC_WEIGHT_DECAY = 0.0001
 FC_WEIGHT_STDDEV = 0.01
 RESNET_VARIABLES = 'resnet_variables'
 UPDATE_OPS_COLLECTION = 'resnet_update_ops'  # must be grouped with training op
-IMAGENET_MEAN_BGR = [103.062623801, 115.902882574, 123.151630838, ]
 activation = tf.nn.relu
 
 FLAGS = tf.app.flags.FLAGS
@@ -290,7 +289,7 @@ def residual_net(x, n, n_classes, phase_train, scope='res_net'):
   return y
 
 
-def inference(images, phase_train=True):
+def inference(images, phase_train=True, labels=None):
   """Build the CIFAR-10 model.
 
   Args:
@@ -374,7 +373,7 @@ def inference(images, phase_train=True):
 
   # return residual_net(images, 5, 10, phase_train)
 
-  return inference_small(images, phase_train)
+  return inference_small(images, phase_train, labels=labels)
 
 # This is what they use for CIFAR-10 and 100.
 # See Section 4.2 in http://arxiv.org/abs/1512.03385
@@ -470,8 +469,8 @@ def inference_small_config(x, c, labels):
     with tf.variable_scope('fc'):
         x = fc(pooled_features, c)
 
-#    context_pred = context(pooled_features, labels, c)
-#    context_logits = context_infer(pooled_features, c)
+    # context_pred = context(pooled_features, labels, c)
+    # context_logits = context_infer(pooled_features, c)
 
     return x #, context_pred, context_logits
 
