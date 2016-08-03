@@ -47,6 +47,7 @@ import tensorflow as tf
 import cifar10_input
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.training import moving_averages
+from tensorflow.contrib.layers.python.layers import batch_norm as batch_norm
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
 from config import Config
@@ -54,9 +55,8 @@ from config import Config
 MOVING_AVERAGE_DECAY = 0.9997
 BN_DECAY = MOVING_AVERAGE_DECAY
 BN_EPSILON = 0.001
-CONV_WEIGHT_DECAY = 0.0001
-CONV_WEIGHT_STDDEV = 0.1
-FC_WEIGHT_DECAY = 0.0001
+CONV_WEIGHT_DECAY=0.0001
+FC_WEIGHT_DECAY = CONV_WEIGHT_DECAY
 FC_WEIGHT_STDDEV = 0.01
 RESNET_VARIABLES = 'resnet_variables'
 UPDATE_OPS_COLLECTION = 'resnet_update_ops'  # must be grouped with training op
@@ -214,40 +214,57 @@ def conv2d(x, n_in, n_out, k, s, p='SAME', bias=False, scope='conv'):
       conv = tf.nn.bias_add(conv, bias)
   return conv
 
-def batch_norm(x, n_out, phase_train, scope='bn', affine=True):
-  """
-  Batch normalization on convolutional maps.
-  Args:
-    x: Tensor, 4D BHWD input maps
-    n_out: integer, depth of input maps
-    phase_train: boolean tf.Variable, true indicates training phase
-    scope: string, variable scope
-    affine: whether to affine-transform outputs
-  Return:
-    normed: batch-normalized maps
-  """
-  with tf.variable_scope(scope):
-    beta = tf.Variable(tf.constant(0.0, shape=[n_out]),
-      name='beta', trainable=True)
-    gamma = tf.Variable(tf.constant(1.0, shape=[n_out]),
-      name='gamma', trainable=affine)
-    tf.add_to_collection('biases', beta)
-    tf.add_to_collection('weights', gamma)
+def batch_norm_layer(x, train_phase,scope="BN"):
+  bn_train = batch_norm(x, decay=0.8, center=True, scale=True,
+  updates_collections=None,
+  is_training=True,
+  reuse=None, # is this right?
+  trainable=True,
+  scope=scope)
+  bn_inference = batch_norm(x, decay=0.8, center=True, scale=True,
+  updates_collections=None,
+  is_training=False,
+  reuse=True, # is this right?
+  trainable=True,
+  scope=scope)
+  z = tf.cond(train_phase, lambda: bn_train, lambda: bn_inference)
+  return z
 
-    batch_mean, batch_var = tf.nn.moments(x, [0,1,2], name='moments')
-    ema = tf.train.ExponentialMovingAverage(decay=0.99)
+# def batch_norm(x, c):
+#   """
+#   Batch normalization on convolutional maps.
+#   Args:
+#     x: Tensor, 4D BHWD input maps
+#     n_out: integer, depth of input maps
+#     c['is_training']: boolean tf.Variable, true indicates training phase
+#     scope: string, variable scope
+#     affine: whether to affine-transform outputs
+#   Return:
+#     normed: batch-normalized maps
+#   """
+#   params_shape = x.get_shape()[-1:]
 
-    def mean_var_with_update():
-      ema_apply_op = ema.apply([batch_mean, batch_var])
-      with tf.control_dependencies([ema_apply_op]):
-        return tf.identity(batch_mean), tf.identity(batch_var)
-    mean, var = control_flow_ops.cond(phase_train,
-      mean_var_with_update,
-      lambda: (ema.average(batch_mean), ema.average(batch_var)))
+#   beta = _get_variable('beta',
+#                         params_shape,
+#                         initializer=tf.zeros_initializer)
+#   gamma = _get_variable('gamma',
+#                         params_shape,
+#                         initializer=tf.ones_initializer)
 
-    normed = tf.nn.batch_norm_with_global_normalization(x, mean, var, 
-      beta, gamma, 1e-3, affine)
-  return normed
+#   batch_mean, batch_var = tf.nn.moments(x, [0,1,2], name='moments')
+#   ema = tf.train.ExponentialMovingAverage(decay=0.99)
+
+#   def mean_var_with_update():
+#     ema_apply_op = ema.apply([batch_mean, batch_var])
+#     with tf.control_dependencies([ema_apply_op]):
+#       return tf.identity(batch_mean), tf.identity(batch_var)
+#   mean, var = control_flow_ops.cond(c['is_training'],
+#     mean_var_with_update,
+#     lambda: (ema.average(batch_mean), ema.average(batch_var)))
+
+#   normed = tf.nn.batch_normalization(x, mean, var, 
+#     beta, gamma, 1e-3)
+#   return normed
 
 def residual_block(x, n_in, n_out, subsample, phase_train, scope='res_block'):
   with tf.variable_scope(scope):
@@ -258,10 +275,10 @@ def residual_block(x, n_in, n_out, subsample, phase_train, scope='res_block'):
     else:
       y = conv2d(x, n_in, n_out, 3, 1, 'SAME', False, scope='conv_1')
       shortcut = tf.identity(x, name='shortcut')
-    y = batch_norm(y, n_out, phase_train, scope='bn_1')
+    y = batch_norm_layer(y, phase_train, scope='bn_1')
     y = tf.nn.relu(y, name='relu_1')
     y = conv2d(y, n_out, n_out, 3, 1, 'SAME', True, scope='conv_2')
-    y = batch_norm(y, n_out, phase_train, scope='bn_2')
+    y = batch_norm_layer(y, phase_train, scope='bn_2')
     y = y + shortcut
     y = tf.nn.relu(y, name='relu_2')
   return y
@@ -273,20 +290,34 @@ def residual_group(x, n_in, n_out, n, first_subsample, phase_train, scope='res_g
       y = residual_block(y, n_out, n_out, False, phase_train, scope='block_%d' % (i + 2))
   return y
 
-def residual_net(x, n, n_classes, phase_train, scope='res_net'):
+def residual_net(x, n, n_classes, phase_train, scope='res_net', labels=None):
   with tf.variable_scope(scope):
     y = conv2d(x, 3, 16, 3, 1, 'SAME', False, scope='conv_init')
-    y = batch_norm(y, 16, phase_train, scope='bn_init')
+    y = batch_norm_layer(y, phase_train, scope='bn_init')
     y = tf.nn.relu(y, name='relu_init')
     y = residual_group(y, 16, 16, n, False, phase_train, scope='group_1')
     y = residual_group(y, 16, 32, n, True, phase_train, scope='group_2')
     y = residual_group(y, 32, 64, n, True, phase_train, scope='group_3')
-    y = conv2d(y, 64, n_classes, 1, 1, 'SAME', True, scope='conv_last')
-    y = tf.nn.avg_pool(y, [1, 6, 6, 1], [1, 1, 1, 1], 'VALID', name='avg_pool')
-    y = tf.squeeze(y, squeeze_dims=[1, 2])
+    pooled_features = tf.reduce_mean(y, [1, 2], name='avg_pool')
+
+
+    with tf.variable_scope("fc"):
+      weights_initializer = tf.truncated_normal_initializer(
+          stddev=FC_WEIGHT_STDDEV)
+      weights = _get_variable('weights',
+                              shape=[64, n_classes],
+                              initializer=weights_initializer,
+                              weight_decay=FC_WEIGHT_DECAY)
+      biases = _get_variable('biases',
+                            shape=[n_classes],
+                            initializer=tf.zeros_initializer)
+      y = tf.nn.xw_plus_b(pooled_features, weights, biases)
+
+    context_pred = context(pooled_features, labels)
+    context_logits = context_infer(pooled_features)
+
     assert y is not None
-    print(tf.Tensor.get_shape(y))
-  return y
+  return y, context_pred, context_logits
 
 
 def inference(images, phase_train=True, labels=None):
@@ -298,80 +329,10 @@ def inference(images, phase_train=True, labels=None):
   Returns:
     Logits.
   """
-  # We instantiate all variables using tf.get_variable() instead of
-  # tf.Variable() in order to share variables across multiple GPU training runs.
-  # If we only ran this model on a single GPU, we could simplify this function
-  # by replacing all instances of tf.get_variable() with tf.Variable().
-  #
-  # conv1
-
-
-  # with tf.variable_scope('conv1') as scope:
-  #   kernel = _variable_with_weight_decay('weights', shape=[5, 5, 3, 64],
-  #                                        stddev=1e-4, wd=0.0)
-  #   conv = tf.nn.conv2d(images, kernel, [1, 1, 1, 1], padding='SAME')
-  #   biases = _variable_on_cpu('biases', [64], tf.constant_initializer(0.0))
-  #   bias = tf.nn.bias_add(conv, biases)
-  #   conv1 = tf.nn.relu(bias, name=scope.name)
-  #   _activation_summary(conv1)
-
-  # # pool1
-  # pool1 = tf.nn.max_pool(conv1, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
-  #                        padding='SAME', name='pool1')
-  # # norm1
-  # norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-  #                   name='norm1')
-
-  # # conv2
-  # with tf.variable_scope('conv2') as scope:
-  #   kernel = _variable_with_weight_decay('weights', shape=[5, 5, 64, 64],
-  #                                        stddev=1e-4, wd=0.0)
-  #   conv = tf.nn.conv2d(norm1, kernel, [1, 1, 1, 1], padding='SAME')
-  #   biases = _variable_on_cpu('biases', [64], tf.constant_initializer(0.1))
-  #   bias = tf.nn.bias_add(conv, biases)
-  #   conv2 = tf.nn.relu(bias, name=scope.name)
-  #   _activation_summary(conv2)
-
-  # # norm2
-  # norm2 = tf.nn.lrn(conv2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-  #                   name='norm2')
-  # # pool2
-  # pool2 = tf.nn.max_pool(norm2, ksize=[1, 3, 3, 1],
-  #                        strides=[1, 2, 2, 1], padding='SAME', name='pool2')
-
-  # # local3
-  # with tf.variable_scope('local3') as scope:
-  #   # Move everything into depth so we can perform a single matrix multiply.
-  #   reshape = tf.reshape(pool2, [FLAGS.batch_size, -1])
-  #   dim = reshape.get_shape()[1].value
-  #   weights = _variable_with_weight_decay('weights', shape=[dim, 384],
-  #                                         stddev=0.04, wd=0.004)
-  #   biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
-  #   local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
-  #   _activation_summary(local3)
-
-  # # local4
-  # with tf.variable_scope('local4') as scope:
-  #   weights = _variable_with_weight_decay('weights', shape=[384, 192],
-  #                                         stddev=0.04, wd=0.004)
-  #   biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
-  #   local4 = tf.nn.relu(tf.matmul(local3, weights) + biases, name=scope.name)
-  #   _activation_summary(local4)
-
-  # # softmax, i.e. softmax(WX + b)
-  # with tf.variable_scope('softmax_linear') as scope:
-  #   weights = _variable_with_weight_decay('weights', [192, NUM_CLASSES],
-  #                                         stddev=1/192.0, wd=0.0)
-  #   biases = _variable_on_cpu('biases', [NUM_CLASSES],
-  #                             tf.constant_initializer(0.0))
-  #   softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
-  #   _activation_summary(softmax_linear)
-
-  # return softmax_linear
-
+ # _activation_summary
   phase_train = tf.convert_to_tensor(phase_train, dtype='bool', name='is_training')
 
-  # return residual_net(images, 5, 10, phase_train)
+  return residual_net(images, 3, 10, phase_train, labels=labels)
 
   return inference_small(images, phase_train, labels=labels)
 
@@ -393,7 +354,7 @@ def inference_small(x,
     c['num_classes'] = num_classes
     return inference_small_config(x, c, labels)
 
-def context_infer(pooled_features, c):
+def context_infer(pooled_features):
     with tf.variable_scope("fc", reuse=True):
         weights = tf.stop_gradient(tf.get_variable("weights"))
         # b = tf.stop_gradient(tf.get_variable("biases"))
@@ -421,13 +382,18 @@ def context_infer(pooled_features, c):
     # TODO how to deal with b?
     return scores
 
-def context(pooled_features, labels, c):
+def context(pooled_features, labels):
     with tf.variable_scope("fc", reuse=True):
         weights = tf.stop_gradient(tf.get_variable("weights"))
         # b = tf.stop_gradient(tf.get_variable("biases"))
     z = tf.stop_gradient(pooled_features) # Nx64
     
     w = tf.transpose(weights) # 10x64
+    if labels is None:
+      with tf.variable_scope("context"):
+        tf.get_variable("weights")
+        tf.get_variable("biases")
+      return None
     w = tf.gather(w, labels) # Nx64
 
     _, variance = tf.nn.moments(w, [1], keep_dims=True) # Nx1
@@ -437,8 +403,20 @@ def context(pooled_features, labels, c):
 
     h = tf.sub(z, response_vec)
     with tf.variable_scope("context"):
-        x = fc(h, c)
+        x = myFC(h, 64, 10)
     return x    
+
+def myFC(h, f_in,f_out):
+  weights_initializer = tf.truncated_normal_initializer(
+      stddev=FC_WEIGHT_STDDEV)
+  weights = _get_variable('weights',
+                          shape=[f_in, f_out],
+                          initializer=weights_initializer,
+                          weight_decay=FC_WEIGHT_DECAY)
+  biases = _get_variable('biases',
+                        shape=[f_out],
+                        initializer=tf.zeros_initializer)
+  return tf.nn.xw_plus_b(h, weights, biases)
 
 def inference_small_config(x, c, labels):
     c['bottleneck'] = False
@@ -449,7 +427,7 @@ def inference_small_config(x, c, labels):
         c['block_filters_internal'] = 16
         c['stack_stride'] = 1
         x = conv(x, c)
-        x = bn(x, c)
+        x = batch_norm_layer(x, c)
         x = activation(x)
         x = stack(x, c)
 
@@ -469,10 +447,10 @@ def inference_small_config(x, c, labels):
     with tf.variable_scope('fc'):
         x = fc(pooled_features, c)
 
-    # context_pred = context(pooled_features, labels, c)
-    # context_logits = context_infer(pooled_features, c)
+    context_pred = context(pooled_features, labels, c)
+    context_logits = context_infer(pooled_features, c)
 
-    return x #, context_pred, context_logits
+    return x, context_pred, context_logits
 
 def stack(x, c):
     for n in range(c['num_blocks']):
@@ -502,12 +480,12 @@ def block(x, c):
             c['ksize'] = 1
             c['stride'] = c['block_stride']
             x = conv(x, c)
-            x = bn(x, c)
+            x = batch_norm_layer(x, c)
             x = activation(x)
 
         with tf.variable_scope('b'):
             x = conv(x, c)
-            x = bn(x, c)
+            x = batch_norm_layer(x, c)
             x = activation(x)
 
         with tf.variable_scope('c'):
@@ -515,13 +493,13 @@ def block(x, c):
             c['ksize'] = 1
             assert c['stride'] == 1
             x = conv(x, c)
-            x = bn(x, c)
+            x = batch_norm_layer(x, c)
     else:
         with tf.variable_scope('A'):
             c['stride'] = c['block_stride']
             assert c['ksize'] == 3
             x = conv(x, c)
-            x = bn(x, c)
+            x = batch_norm_layer(x, c)
             x = activation(x)
 
         with tf.variable_scope('B'):
@@ -529,7 +507,7 @@ def block(x, c):
             assert c['ksize'] == 3
             assert c['stride'] == 1
             x = conv(x, c)
-            x = bn(x, c)
+            x = batch_norm_layer(x, c)
 
     with tf.variable_scope('shortcut'):
         if filters_out != filters_in or c['block_stride'] != 1:
@@ -537,7 +515,7 @@ def block(x, c):
             c['stride'] = c['block_stride']
             c['conv_filters_out'] = filters_out
             shortcut = conv(shortcut, c)
-            shortcut = bn(shortcut, c)
+            shortcut = batch_norm_layer(shortcut, c)
 
     return activation(x + shortcut)
 
@@ -550,7 +528,6 @@ def bn(x, c):
         bias = _get_variable('bias', params_shape,
                              initializer=tf.zeros_initializer)
         return x + bias
-
 
     axis = list(range(len(x_shape) - 1))
 
@@ -635,7 +612,7 @@ def conv(x, c):
 
     filters_in = x.get_shape()[-1]
     shape = [ksize, ksize, filters_in, filters_out]
-    initializer = tf.truncated_normal_initializer(stddev=CONV_WEIGHT_STDDEV)
+    initializer = tf.truncated_normal_initializer(stddev=math.sqrt(2/(ksize*ksize*int(filters_in))))
     weights = _get_variable('weights',
                             shape=shape,
                             dtype='float',
@@ -667,9 +644,14 @@ def loss(logits, labels):
   # Calculate the average cross entropy loss across the batch.
   labels = tf.cast(labels, tf.int64)
   cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-      logits, labels, name='cross_entropy_per_example')
+      logits[0], labels, name='cross_entropy_per_example')
   cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
   tf.add_to_collection('losses', cross_entropy_mean)
+
+
+  cross_entropy_context = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+      logits[1], labels, name='cross_entropy_context'), name='cross_context')
+  tf.add_to_collection('losses', cross_entropy_context)
 
   # The total loss is defined as the cross entropy loss plus all of the weight
   # decay terms (L2 loss).
@@ -749,8 +731,7 @@ def train(total_loss, global_step):
       tf.histogram_summary(var.op.name + '/gradients', grad)
 
   # Track the moving averages of all trainable variables.
-  variable_averages = tf.train.ExponentialMovingAverage(
-      MOVING_AVERAGE_DECAY, global_step)
+  variable_averages = tf.train.ExponentialMovingAverage(MOVING_AVERAGE_DECAY, global_step)
   variables_averages_op = variable_averages.apply(tf.trainable_variables())
 
   with tf.control_dependencies([apply_gradient_op, variables_averages_op]):

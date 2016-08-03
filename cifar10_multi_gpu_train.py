@@ -56,7 +56,7 @@ tf.app.flags.DEFINE_string('train_dir', 'data/train',
                            """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 64000,
                             """Number of batches to run.""")
-tf.app.flags.DEFINE_integer('num_gpus', 8,
+tf.app.flags.DEFINE_integer('num_gpus', 1,
                             """How many GPUs to use.""")
 tf.app.flags.DEFINE_boolean('log_device_placement', False,
                             """Whether to log device placement.""")
@@ -248,13 +248,13 @@ def train():
       if step == 0:
         stairs=.1
         print("steps",step,"lr",stairs)
-      elif step == 32000-1:
+      elif step == FLAGS.max_steps//2-1:
         stairs=.01
         print("steps",step,"lr",stairs)
-      elif step == 48000-1:
+      elif step == (FLAGS.max_steps//4)*3-1:
         stairs=.001
         print("steps",step,"lr",stairs)
-      elif step == 64000-1:
+      elif step == FLAGS.max_steps-1:
         print("steps",step)
 
       start_time = time.time()
@@ -263,7 +263,7 @@ def train():
 
       assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
-      if step % 1000 == 0:
+      if step % 100 == 0:
         num_examples_per_step = FLAGS.batch_size * FLAGS.num_gpus
         examples_per_sec = num_examples_per_step / duration
         sec_per_batch = duration / FLAGS.num_gpus
